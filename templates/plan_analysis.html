@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <title>STP Track Tool - Plan Analysis</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dark_mode.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="p-4">
+    <div class="container-fluid">
+        <h2>STP Track Plan Analysis</h2>
+        <a href="/" class="btn btn-secondary mb-3">Back to Home</a>
+        
+        <div class="filter-container">
+            <div class="row">
+                <div class="col-md-6">
+                    <label for="gatewayFilter" class="form-label">Filter by Gateway:</label>
+                    <select class="form-select" id="gatewayFilter">
+                        <option value="">All Gateways</option>
+                    </select>
+                </div>
+                <div class="col-md-6">
+                    <label for="satelliteFilter" class="form-label">Filter by Satellite:</label>
+                    <select class="form-select" id="satelliteFilter">
+                        <option value="">All Satellites</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        
+        <div class="table-container mb-4">
+            <h3>Schedule Table</h3>
+            <div id="tableContainer">{{ table|safe }}</div>
+        </div>
+        
+        <div class="stats-container">
+            {{ stats|safe }}
+        </div>
+        
+        <div class="chart-container">
+            <h3>Visual Timeline</h3>
+            <ul class="nav nav-tabs" id="gatewayTabs" role="tablist">
+                {% for tab in tabs %}
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link {% if loop.first %}active{% endif %}" 
+                            id="{{ tab.label }}-tab" 
+                            data-bs-toggle="tab" 
+                            data-bs-target="#{{ tab.label|replace(' ', '_') }}" 
+                            type="button" 
+                            role="tab" 
+                            aria-controls="{{ tab.label|replace(' ', '_') }}" 
+                            aria-selected="{% if loop.first %}true{% else %}false{% endif %}">
+                        {{ tab.label }}
+                    </button>
+                </li>
+                {% endfor %}
+            </ul>
+            <div class="tab-content" id="gatewayTabsContent">
+                {% for tab in tabs %}
+                <div class="tab-pane fade {% if loop.first %}show active{% endif %}" 
+                    id="{{ tab.label|replace(' ', '_') }}" 
+                    role="tabpanel" 
+                    aria-labelledby="{{ tab.label }}-tab">
+                    <div style="width: 100%; overflow-x: auto;">
+                        {{ tab.content|safe }}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/table_filters.js') }}"></script>
+</body>
+</html>
