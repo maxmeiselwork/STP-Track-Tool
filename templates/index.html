@@ -93,15 +93,35 @@
                         <h5 class="mb-0">Full STP Track Plan Analysis</h5>
                     </div>
                     <div class="card-body">
-                        <p>Analyze a complete STP Track Plan across all gateways.</p>
+                        <p>Analyze a complete STP Track Plan across all gateways with optional date/time updates.</p>
                         <form method="post" enctype="multipart/form-data">
                             <input type="hidden" name="form_type" value="plan_analysis">
-                            <div class="mb-3">
-                                <label class="form-label">Full Complete Schedule File:</label>
-                                <input type="file" class="form-control" name="full_plan" accept=".txt" required>
-                                <div class="form-text">Schedule file with all gateways included.</div>
+                            <div class="row">
+                                <div class="col-md-12">
+                                    <div class="mb-3">
+                                        <label class="form-label">Full Complete Schedule File:</label>
+                                        <input type="file" class="form-control" name="full_plan" accept=".txt" required>
+                                        <div class="form-text">Schedule file with all gateways included.</div>
+                                    </div>
+                                </div>
                             </div>
-                            <button type="submit" class="btn btn-primary w-100">View Analysis</button>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">Deploy Date (YYYYMMDD) - Optional:</label>
+                                        <input type="text" class="form-control" name="Deploy_Date">
+                                        <div class="form-text">Leave blank to analyze existing dates.</div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">Deploy Time (HH:MM:SS) - Optional:</label>
+                                        <input type="text" class="form-control" name="Deploy_Time">
+                                        <div class="form-text">Leave blank to analyze existing times.</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100">Analyze Plan</button>
                         </form>
                     </div>
                 </div>

@@ -3,116 +3,174 @@ Plan Analysis Module
 Handles analysis and visualization of full satellite tracking plans.
 """
 
-from flask import render_template, request, flash, redirect, url_for
+from flask import render_template, request, flash, redirect, url_for, send_file
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import plotly.graph_objects as go
+from io import BytesIO
 
-def analyze_plan_txt_file(file_obj):
-    """Analyze a plan TXT file and extract track data."""
+# Global memory buffer for updated plan download
+stored_updated_plan = BytesIO()
+download_used = {'plan': False}
+
+# --- [Function: update_plan_dates_new] ---
+def update_plan_dates_new(file_content, new_deploy_date, new_deploy_time):
+    """Update plan dates similar to XML analysis - preserve times, update dates."""
+    lines = file_content.strip().split('\n')
+    if len(lines) < 3:
+        raise ValueError("Invalid plan file format")
+
+    # Parse deploy datetime
+    new_deploy_datetime = datetime.combine(new_deploy_date.date(), new_deploy_time.time())
+    new_deploy_str = new_deploy_datetime.strftime("%Y%m%d%H%M%S.000")
+    
+    # Find gateway section and collect all tracks
+    gateway_start = next((i for i, line in enumerate(lines) if line.startswith('GS_')), None)
+    if gateway_start is None:
+        raise ValueError("No gateway lines found")
+    
+    tracks = []
+    current_gateway = None
+    
+    for line in lines[gateway_start:]:
+        line = line.strip()
+        if line.startswith('GS_'):
+            current_gateway = line
+            continue
+        
+        parts = line.split()
+        if len(parts) >= 5 and parts[1] == 'DAT' and parts[2] == 'RECUR':
+            try:
+                original_start = datetime.strptime(parts[3].split('.')[0], "%Y%m%d%H%M%S")
+                original_end = datetime.strptime(parts[4].split('.')[0], "%Y%m%d%H%M%S")
+                
+                # Extract time components
+                start_time = original_start.time()
+                end_time = original_end.time()
+                
+                # Create new datetime with deploy date but original times
+                new_start = datetime.combine(new_deploy_date.date(), start_time)
+                
+                # Handle end time - if end time is earlier than start time, it's next day
+                if end_time < start_time:
+                    new_end = datetime.combine(new_deploy_date.date() + timedelta(days=1), end_time)
+                else:
+                    new_end = datetime.combine(new_deploy_date.date(), end_time)
+                
+                tracks.append({
+                    'gateway': current_gateway,
+                    'satellite': parts[0],
+                    'data': parts[1],
+                    'recur': parts[2],
+                    'start': new_start,
+                    'end': new_end,
+                    'original_line': line
+                })
+            except Exception:
+                # Keep non-track lines as is
+                tracks.append({
+                    'gateway': current_gateway,
+                    'original_line': line,
+                    'is_track': False
+                })
+    
+    if not any(t.get('start') for t in tracks):
+        raise ValueError("No valid tracks found for date update")
+    
+    # Find first track time for new epoch
+    first_track_time = min(t['start'] for t in tracks if t.get('start'))
+    new_epoch_millis = int(first_track_time.timestamp() * 1000)
+    
+    # Build updated content
+    updated_lines = [str(new_epoch_millis), new_deploy_str]
+    
+    current_gateway = None
+    for track in tracks:
+        if track['gateway'] != current_gateway:
+            current_gateway = track['gateway']
+            updated_lines.append(current_gateway)
+        
+        if track.get('start'):  # It's a track line
+            start_str = track['start'].strftime("%Y%m%d%H%M%S.000")
+            end_str = track['end'].strftime("%Y%m%d%H%M%S.000")
+            updated_lines.append(f"{track['satellite']} {track['data']} {track['recur']} {start_str} {end_str}")
+        else:  # Non-track line
+            updated_lines.append(track['original_line'])
+    
+    return '\n'.join(updated_lines)
+
+# --- [Function: analyze_plan_txt_file] ---
+def analyze_plan_txt_file(file_obj, new_deploy_date=None, new_deploy_time=None):
     try:
-        # Read the file content
+        file_obj.seek(0)
         try:
-            file_content = file_obj.read().decode('utf-8')
+            content = file_obj.read().decode('utf-8')
         except UnicodeDecodeError:
             file_obj.seek(0)
-            file_content = file_obj.read().decode('utf-8', errors='ignore')
-        
-        # Split into lines and strip whitespace and check file length
-        lines = [line.strip() for line in file_content.splitlines() if line.strip()]
+            content = file_obj.read().decode('utf-8', errors='ignore')
+
+        dates_updated = False
+        if new_deploy_date and new_deploy_time:
+            try:
+                content = update_plan_dates_new(content, new_deploy_date, new_deploy_time)
+                global stored_updated_plan, download_used
+                stored_updated_plan = BytesIO()
+                stored_updated_plan.write(content.encode("utf-8"))
+                stored_updated_plan.seek(0)
+                download_used['plan'] = False
+                dates_updated = True
+            except Exception as e:
+                raise ValueError(f"Date update failed: {str(e)}")
+
+        lines = [l.strip() for l in content.splitlines() if l.strip()]
         if len(lines) < 3:
-            raise ValueError("File too short - needs at least 3 lines (epoch, deploy time, and one gateway)")
-        
-        # Find the first gateway line
-        gateway_start = None
-        for i, line in enumerate(lines):
-            if line.startswith('GS_'):
-                gateway_start = i
-                break
-        
+            raise ValueError("File too short")
+
+        gateway_start = next((i for i, line in enumerate(lines) if line.startswith('GS_')), None)
         if gateway_start is None:
-            raise ValueError("No gateway entries found (lines starting with 'GS_')")
-        
-        # Process tracks by gateway first
+            raise ValueError("No gateway lines found")
+
         gateway_data = {}
         current_gateway = None
-        
         for line in lines[gateway_start:]:
             if line.startswith('GS_'):
                 current_gateway = line
                 gateway_data[current_gateway] = []
                 continue
-            
             parts = line.split()
             if len(parts) >= 5 and parts[1] == 'DAT' and parts[2] == 'RECUR':
                 try:
-                    start_str = parts[3].split('.')[0]  
-                    end_str = parts[4].split('.')[0]
-                    
-                    start_time = datetime.strptime(start_str, "%Y%m%d%H%M%S")
-                    end_time = datetime.strptime(end_str, "%Y%m%d%H%M%S")
-                    duration = (end_time - start_time).total_seconds() / 60.0
-                    
-                    # Check duration flags
-                    flags = [] 
-                    if duration < 24:
-                        flags.append("SHORT")
-                    elif duration > 45:
-                        flags.append("LONG")
-                    
-                    flag = ", ".join(flags) if flags else "OK"
-                    
-                    gateway_data[current_gateway].append([current_gateway, parts[0], start_time, end_time, duration, flag])
-                except ValueError as e:
-                    print(f"Skipping line due to error: {line}\nError: {str(e)}")
-                    continue
-        
-        # Check for overlaps within each gateway
+                    start = datetime.strptime(parts[3].split('.')[0], "%Y%m%d%H%M%S")
+                    end = datetime.strptime(parts[4].split('.')[0], "%Y%m%d%H%M%S")
+                    duration = (end - start).total_seconds() / 60.0
+                    if duration < 0:
+                        duration += 1440
+                    flags = []
+                    if duration < 24: flags.append("SHORT")
+                    if duration > 45: flags.append("LONG")
+                    gateway_data[current_gateway].append([current_gateway, parts[0], start, end, duration, ", ".join(flags) or "OK"])
+                except: continue
+
         all_data = []
         for gateway, tracks in gateway_data.items():
-            if not tracks:
-                continue
-                
-            tracks.sort(key=lambda x: x[2])  
-
-            # Check for overlaps within this gateway
+            tracks.sort(key=lambda x: x[2])
             for i in range(len(tracks)):
-                current_start = tracks[i][2]
-                current_end = tracks[i][3]
-                
-                overlaps_prev = True
-                overlaps_next = True
-                
-                # Check overlap with previous satellite in this gateway
-                if i > 0:
-                    prev_end = tracks[i - 1][3]
-                    overlaps_prev = current_start <= prev_end
-                
-                # Check overlap with next satellite in this gateway
-                if i < len(tracks) - 1:
-                    next_start = tracks[i + 1][2]
-                    overlaps_next = current_end >= next_start
-                
-                # Add NO OVERLAP flag if needed
-                if (not overlaps_prev or not overlaps_next):
-                    current_flags = tracks[i][5].split(", ") if tracks[i][5] != "OK" else []
-                    if "NO OVERLAP" not in current_flags:
-                        current_flags.append("NO OVERLAP")
-                    tracks[i][5] = ", ".join(current_flags) if current_flags else "OK"
-            
+                overlaps_prev = i == 0 or tracks[i][2] <= tracks[i-1][3]
+                overlaps_next = i == len(tracks)-1 or tracks[i][3] >= tracks[i+1][2]
+                if not (overlaps_prev and overlaps_next):
+                    flags = tracks[i][5].split(', ') if tracks[i][5] != "OK" else []
+                    if "NO OVERLAP" not in flags:
+                        flags.append("NO OVERLAP")
+                        tracks[i][5] = ", ".join(sorted(set(flags)))
             all_data.extend(tracks)
-        
+
         if not all_data:
-            raise ValueError("No valid track entries found in file")
-            
-        # Create DataFrame and sort chronologically for display
-        base_df = pd.DataFrame(all_data, columns=["Gateway", "Satellite", "Start", "End", "Duration", "Flag"])
-        base_df = base_df.sort_values(['Start']).reset_index(drop=True)
-        
-        return base_df
-        
+            raise ValueError("No valid tracks found")
+
+        df = pd.DataFrame(all_data, columns=["Gateway", "Satellite", "Start", "End", "Duration", "Flag"])
+        return df.sort_values("Start").reset_index(drop=True), dates_updated
     except Exception as e:
-        raise ValueError(f"Error processing file: {str(e)}")
+        raise ValueError(f"Error processing plan: {str(e)}")
 
 def generate_gantt_multi_gateway(df):
     gateways = df['Gateway'].unique()
@@ -288,8 +346,26 @@ def handle_plan_analysis(request):
             flash("Please upload a .txt file", "error")
             return redirect(url_for('index'))
         
+        # Get optional deploy date/time
+        deploy_date_str = request.form.get('Deploy_Date', '').strip()
+        deploy_time_str = request.form.get('Deploy_Time', '').strip()
+        
+        new_deploy_date = None
+        new_deploy_time = None
+        
+        if deploy_date_str and deploy_time_str:
+            try:
+                new_deploy_date = datetime.strptime(deploy_date_str, "%Y%m%d")
+                new_deploy_time = datetime.strptime(deploy_time_str, "%H:%M:%S")
+            except ValueError:
+                flash("Invalid deploy date or time format", "error")
+                return redirect(url_for('index'))
+        elif deploy_date_str or deploy_time_str:
+            flash("Both deploy date and time must be provided if updating dates", "error")
+            return redirect(url_for('index'))
+        
         try:
-            df = analyze_plan_txt_file(full_plan_file.stream)
+            df, dates_updated = analyze_plan_txt_file(full_plan_file.stream, new_deploy_date, new_deploy_time)
             df_reset = df.reset_index(drop=True)
 
         except ValueError as e:
@@ -336,10 +412,14 @@ def handle_plan_analysis(request):
         {"<span style='color: red;'>\u26a0 Schedule exceeds 24-hour period</span>" if time_span_hours > 24 else "\u2705 Schedule fits within a 24-hour period"}
         """
         
+        # Add date update info if dates were updated
+        if dates_updated:
+            stats += f"<br><br><span style='color: green;'>\u2705 Dates updated to deploy date: {new_deploy_date.strftime('%Y-%m-%d')} at {new_deploy_time.strftime('%H:%M:%S')}</span>"
+        
         # Generate the Gantt chart
         tabs = generate_gantt_multi_gateway(df)
         
-        return render_template('plan_analysis.html', table=styled_table_html, stats=stats, tabs=tabs)
+        return render_template('plan_analysis.html', table=styled_table_html, stats=stats, tabs=tabs, dates_updated=dates_updated)
 
     except ValueError as e:
         flash(str(e), "error")
@@ -347,3 +427,14 @@ def handle_plan_analysis(request):
     except Exception as e:
         flash(f"Error processing plan analysis file: {str(e)}", "error")
         return redirect(url_for('index'))
+
+def download_updated_plan():
+    """Download updated plan file with new dates."""
+    global stored_updated_plan, download_used
+    if download_used['plan']:
+        flash("File already downloaded", "error")
+        return redirect(url_for('index'))
+    
+    stored_updated_plan.seek(0)
+    download_used['plan'] = True
+    return send_file(stored_updated_plan, mimetype='text/plain', as_attachment=True, download_name='updated_plan.txt')

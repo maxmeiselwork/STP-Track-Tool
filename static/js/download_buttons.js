@@ -25,6 +25,19 @@ function initializeDownloadButtons() {
             }, 100);
         });
     }
+    
+    // Handle updated plan download button
+    const downloadUpdatedPlanBtn = document.getElementById('downloadUpdatedPlanBtn');
+    if (downloadUpdatedPlanBtn) {
+        downloadUpdatedPlanBtn.addEventListener('click', function(e) {
+            setTimeout(() => {
+                this.disabled = true;
+                this.textContent = 'Downloaded';
+                this.classList.remove('btn-primary');
+                this.classList.add('btn-secondary');
+            }, 100);
+        });
+    }
 }
 
 // Initialize when DOM is loaded
